@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "adversary",
+  "description": "User-invoked adversarial critique pipeline.",
+  "owner": {
+    "name": "lkrhl",
+    "email": "37175646+lkrhl@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "adversary",
+      "source": "./"
+    }
+  ]
+}

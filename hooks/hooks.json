@@ -1,0 +1,16 @@
+{
+  "description": "PreToolUse stuck detector for adversary subprocess runs. Gated on ADVERSARY_SUBPROCESS=1 env var — inert in the user's interactive session even though loaded there. Matcher covers all tools the explore/verify/review subprocesses can call.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|Grep|Glob|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stuck-detector.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
