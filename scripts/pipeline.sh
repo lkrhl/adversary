@@ -35,9 +35,18 @@ export ADVERSARY_SUBPROCESS=1
 # `EXPLORE=$(run_stage ...)` runs the function in a command-substitution subshell;
 # bash variable mutations there don't reach the parent. One TSV row per stage:
 #   <stage>\t<status>\t<in>\t<out>\t<cc>\t<cr>\t<cost>
-# Status is OK or FAILED. Failed rows have zeros for the token columns.
+# Status is OK, FAILED, or API_ERROR. Failed/API_ERROR rows have zeros for tokens.
+# API_ERROR signals transient Anthropic failures (529, overloaded, rate limit,
+# 5xx) and triggers an early abort instead of the cascade-with-STUCK fallback.
 STATE_FILE="/tmp/adversary-state-${PIPELINE_ID}.tsv"
+API_ERROR_FILE="/tmp/adversary-api-error-${PIPELINE_ID}.txt"
 : > "$STATE_FILE"
+rm -f "$API_ERROR_FILE"
+
+# Regex for transient Anthropic API failures we want to short-circuit on.
+# Matched against stderr (when claude exits non-zero) and against the JSON
+# result text (when claude exits zero but sets is_error=true).
+API_ERROR_RE='API Error|overloaded|rate.?limit|529|502|503|504|insufficient_quota'
 
 # Project-local config: tool grants + reporting toggles. Lives at
 # $PWD/.adversary/config.json with shape:
@@ -134,15 +143,22 @@ if [[ -n "${ADVERSARY_COST_REPORTING:-}" ]]; then
   esac
 fi
 
-# Runs one `claude --print` stage. On non-zero exit, substitutes a STUCK block
-# (including stage name, exit code, truncated stderr) so the downstream stage's
-# existing STUCK-handling logic kicks in instead of cascading failure to the
-# parent. set +e/-e is scoped to the claude call only; the outer set -e remains
-# in effect for non-subprocess errors (bad args, missing protocol files, etc.).
+# Runs one `claude --print` stage. Three outcomes:
+#   1. OK     — normal output flows downstream.
+#   2. FAILED — non-API failure (logic, missing files, etc.). Substitutes a
+#               STUCK block so the downstream stage's existing STUCK-handling
+#               logic kicks in instead of cascading failure to the parent.
+#   3. API_ERROR — transient Anthropic failure (529, overloaded, 5xx, rate
+#                  limit). Captures the reason for the main loop to abort on,
+#                  no STUCK block (would mislead the next stage about a real
+#                  finding). Main loop checks STATE_FILE between stages.
+# set +e/-e is scoped to the claude call only; the outer set -e remains in
+# effect for non-subprocess errors (bad args, missing protocol files, etc.).
 run_stage() {
   local stage="$1" protocol="$2" prompt="$3"
   shift 3
   local stderr_file json_output output rc usage_line t_in t_out t_cc t_cr cost
+  local api_reason is_error err_result
   stderr_file=$(mktemp)
   export ADVERSARY_RUN_ID="${PIPELINE_ID}-${stage}"
   # Prompt piped via stdin, not appended as a positional — `--allowedTools <tools...>`
@@ -157,7 +173,28 @@ run_stage() {
     "$@" 2>"$stderr_file")
   rc=$?
   set -e
-  if (( rc != 0 )); then
+
+  # Classify outcome. API errors get checked first because they can surface
+  # either as non-zero exit (stderr) OR zero exit with is_error=true (JSON).
+  api_reason=""
+  if (( rc != 0 )) && grep -qEi "$API_ERROR_RE" "$stderr_file"; then
+    api_reason=$(grep -Ei "$API_ERROR_RE" "$stderr_file" | head -1 | head -c 500)
+  elif (( rc == 0 )) && [[ -n "$json_output" ]]; then
+    is_error=$(printf '%s' "$json_output" | jq -r '.[] | select(.type=="result") | .is_error // false' 2>/dev/null)
+    if [[ "$is_error" == "true" ]]; then
+      err_result=$(printf '%s' "$json_output" | jq -r '.[] | select(.type=="result") | .result // ""' 2>/dev/null | head -c 500)
+      if printf '%s' "$err_result" | grep -qEi "$API_ERROR_RE"; then
+        api_reason="$err_result"
+      fi
+    fi
+  fi
+
+  if [[ -n "$api_reason" ]]; then
+    printf '%s' "$api_reason" > "$API_ERROR_FILE"
+    printf '%s\tAPI_ERROR\t0\t0\t0\t0\t0\n' "$stage" >> "$STATE_FILE"
+    printf 'pipeline.sh: %s stage hit transient Anthropic API error; aborting pipeline\n' "$stage" >&2
+    output=""
+  elif (( rc != 0 )); then
     output=$(printf '## STUCK\nReason: %s subprocess exited %d. See stderr below.\nPartial output: <none>\nstderr (truncated 1KB):\n%s\nRecommendation to downstream: graceful degradation\n' \
       "$stage" "$rc" "$(head -c 1024 "$stderr_file")")
     # Surface the failure to stderr so it's visible even when downstream stages
@@ -182,19 +219,53 @@ run_stage() {
   printf '%s' "$output"
 }
 
+# Called between stages. If the most recent stage hit an API_ERROR, print a
+# clear human-readable abort message and exit 75 (EX_TEMPFAIL) so the parent
+# session can distinguish transient API failures from real plugin bugs.
+abort_if_api_error() {
+  grep -q $'\tAPI_ERROR\t' "$STATE_FILE" || return 0
+  local stage reason
+  stage=$(grep $'\tAPI_ERROR\t' "$STATE_FILE" | head -1 | cut -f1)
+  reason=$(cat "$API_ERROR_FILE" 2>/dev/null || echo "<no detail captured>")
+  cat >&2 <<EOF
+
+========================================
+adversary: aborted — Anthropic API error
+========================================
+Stage:  ${stage}
+Detail: ${reason}
+
+This is a transient Anthropic API issue (overload, rate limit, or 5xx).
+The pipeline stopped before subsequent stages ran; no partial review was
+produced because cascading on a transient error would yield misleading
+output. Please retry in a few minutes.
+========================================
+EOF
+  if [[ "${ADVERSARY_DEBUG:-}" != "1" ]]; then
+    rm -f "$STATE_FILE" "$API_ERROR_FILE" \
+          "/tmp/adversary-stuck-${PIPELINE_ID}-explore.json" \
+          "/tmp/adversary-stuck-${PIPELINE_ID}-verify.json" \
+          "/tmp/adversary-stuck-${PIPELINE_ID}-review.json"
+  fi
+  exit 75
+}
+
 EXPLORE=$(run_stage "explore" "${PLUGIN_ROOT}/protocols/explore.md" "ARTIFACT_PATH: ${ARTIFACT_PATH}" \
   --tools "Read,Grep,Glob" \
   --allowedTools "Read Grep Glob")
+abort_if_api_error
 
 VERIFY_PROMPT=$(printf 'ARTIFACT_PATH: %s\n\nEXPLORE_OUTPUT:\n%s' "$ARTIFACT_PATH" "$EXPLORE")
 VERIFY=$(run_stage "verify" "${PLUGIN_ROOT}/protocols/verify.md" "$VERIFY_PROMPT" \
   --tools "Read,Grep,Glob,Bash,WebFetch${VERIFY_EXTRA_BUILTINS}" \
   --allowedTools "Read Grep Glob Bash(git *) Bash(docker *) Bash(curl *) Bash(lsof *) Bash(wc *) Bash(psql *) Bash(mysql *) Bash(sqlite3 *) WebFetch${VERIFY_EXTRA_ALLOWED_TOOLS}")
+abort_if_api_error
 
 REVIEW_PROMPT=$(printf 'ARTIFACT_PATH: %s\n\nVERIFY_OUTPUT:\n%s' "$ARTIFACT_PATH" "$VERIFY")
 REVIEW=$(run_stage "review" "${PLUGIN_ROOT}/protocols/review.md" "$REVIEW_PROMPT" \
   --tools "Read,Grep,Glob" \
   --allowedTools "Read Grep Glob")
+abort_if_api_error
 
 if [[ "${ADVERSARY_DEBUG:-}" == "1" ]]; then
   printf '%s epoch=%s pipeline.sh END   pid=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$(date '+%s')" "$$" >> /tmp/adversary-timing.log
@@ -230,7 +301,7 @@ fi
 # STUCK blocks — failure context is captured in the STUCK blocks (stage name,
 # exit code, stderr) by run_stage and in the FAILED rows of STATE_FILE.
 if [[ "${ADVERSARY_DEBUG:-}" != "1" ]]; then
-  rm -f "$STATE_FILE" \
+  rm -f "$STATE_FILE" "$API_ERROR_FILE" \
         "/tmp/adversary-stuck-${PIPELINE_ID}-explore.json" \
         "/tmp/adversary-stuck-${PIPELINE_ID}-verify.json" \
         "/tmp/adversary-stuck-${PIPELINE_ID}-review.json"
