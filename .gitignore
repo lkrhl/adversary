@@ -7,6 +7,3 @@
 # OS
 .DS_Store
 Thumbs.db
-
-# Plugin runtime artifacts
-/tmp/claude-plugin-adversary/

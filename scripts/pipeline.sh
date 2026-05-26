@@ -227,6 +227,16 @@ abort_if_api_error() {
   local stage reason
   stage=$(grep $'\tAPI_ERROR\t' "$STATE_FILE" | head -1 | cut -f1)
   reason=$(cat "$API_ERROR_FILE" 2>/dev/null || echo "<no detail captured>")
+  # Surface completed-stage outputs on stdout so the parent session sees them
+  # verbatim (vs. paraphrasing whatever it picks up from the stderr banner).
+  # Reads the main-scope EXPLORE/VERIFY vars directly — unset/empty if that
+  # stage didn't run or didn't complete.
+  if [[ -n "${EXPLORE:-}" ]]; then
+    printf '## Partial results — explore stage (completed)\n\n%s\n\n' "$EXPLORE"
+  fi
+  if [[ -n "${VERIFY:-}" ]]; then
+    printf '## Partial results — verify stage (completed)\n\n%s\n\n' "$VERIFY"
+  fi
   cat >&2 <<EOF
 
 ========================================
