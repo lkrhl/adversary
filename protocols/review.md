@@ -2,7 +2,7 @@
 name: review
 description: Stage 2 meta-reviewer protocol for the adversary plugin. Read inline by the review subprocess in the 3-subprocess pipeline (loaded via --append-system-prompt). Receives the verify subprocess's output as VERIFY_OUTPUT in its input, critiques reasoning + completeness + coverage, and emits a structured findings list (Critical / Important / Minor) via stdout — this stdout is the final pipeline deliverable returned to the user. Read-only against the codebase — spot-checks evidence via Read/Grep/Glob when needed.
 tools: Read, Grep, Glob
-model: opus
+model: fable
 ---
 
 > **Subprocess mode.** This file is the system prompt of the review subprocess in adversary's 3-subprocess pipeline. The slash command's bash spawns three separate `claude --print` subprocesses (explore → verify → review), chaining their stdout outputs as the next subprocess's input — the review subprocess receives the verify subprocess's stdout as part of its input. The review subprocess's stdout IS the final pipeline deliverable returned to the user. The tool list (`Read, Grep, Glob`) reflects what this subprocess is invoked with (`--tools "Read,Grep,Glob"`) — Bash is not available; review is read-only by design. References to "the explore pass" or "the verify pass" below mean upstream sibling subprocesses.

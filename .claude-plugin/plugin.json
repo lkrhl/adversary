@@ -1,6 +1,6 @@
 {
   "name": "adversary",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "User-invoked adversarial critique pipeline. /adversary:review <artifact-path> spawns three fresh Claude subprocesses (explore → verify → review) and prints structured findings in chat. Intermediate stages stay in their subprocess (only the final review enters parent context); nothing is written to your project tree; no subagent permission grants required.",
   "author": {
     "name": "lkrhl",
