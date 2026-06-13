@@ -168,7 +168,7 @@ run_stage() {
   # (which arrives as the `.result` field of the result event).
   set +e
   json_output=$(printf '%s' "$prompt" | claude --print --no-session-persistence \
-    --model claude-fable-5 \
+    --model opus \
     --output-format json \
     --append-system-prompt "$(cat "$protocol")" \
     "$@" 2>"$stderr_file")

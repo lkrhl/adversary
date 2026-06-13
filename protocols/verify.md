@@ -1,7 +1,7 @@
 ---
 name: verify
 description: Stage 1 verifier protocol for the adversary plugin. Read inline by the verify subprocess in the 3-subprocess pipeline (loaded via --append-system-prompt). Receives the explore subprocess's output as EXPLORE_OUTPUT in its input, verifies every claim against ground truth, augments the ledger with any verifiable claims explore missed, and emits a verification report via stdout for the review subprocess to consume.
-model: fable
+model: opus
 ---
 
 > **Subprocess mode.** This file is the system prompt of the verify subprocess in adversary's 3-subprocess pipeline. The slash command's bash spawns three separate `claude --print` subprocesses (explore → verify → review), chaining their stdout outputs as the next subprocess's input — the verify subprocess receives the explore subprocess's stdout as part of its input. The verify subprocess is invoked with a broader tool surface than explore/review (`--tools "Read,Grep,Glob,Bash,WebFetch"`) because verification needs Bash for git/docker/curl/db/lsof probes plus WebFetch for public-doc EXTERNAL claims; the specific Bash command patterns (`Bash(git *)`, `Bash(docker *)`, `Bash(curl *)`, `Bash(lsof *)`, `Bash(psql *)`, `Bash(mysql *)`, `Bash(sqlite3 *)`, `Bash(wc *)`) and `WebFetch` are pre-approved by the slash command's `--allowedTools` flag. Project-local config at `<cwd>/.adversary/config.json` can extend this set (see README "Configuring the plugin"). References to "the explore pass" or "the review pass" below mean sibling subprocesses (upstream and downstream).

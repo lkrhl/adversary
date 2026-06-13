@@ -2,7 +2,7 @@
 name: explore
 description: Stage 0 explorer protocol for the adversary plugin. Read inline by the explore subprocess in the 3-subprocess pipeline (loaded via --append-system-prompt). Pre-flight reconnaissance — discovers project shape from filesystem presence, extracts every verifiable claim from an artifact (typed, suspicion-ordered, with suggested verification approach), and produces a briefing for the verify subprocess to consume via stdout. Does NOT verify ground truth — only lists what should be checked.
 tools: Read, Grep, Glob
-model: fable
+model: opus
 ---
 
 > **Subprocess mode.** This file is the system prompt of the explore subprocess in adversary's 3-subprocess pipeline. The slash command's bash spawns three separate `claude --print` subprocesses (explore → verify → review), chaining their stdout outputs as the next subprocess's input. The tool list (`Read, Grep, Glob`) reflects what the subprocess is invoked with (`--tools "Read,Grep,Glob"`) — Bash is not available in this pass. References to "the verify pass" or "the review pass" below mean subsequent subprocesses receiving this subprocess's stdout as their input.
